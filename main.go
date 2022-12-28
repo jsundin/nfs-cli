@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -102,9 +104,15 @@ func main() {
 			} else {
 				cmd_get(mnt, cwd.append(file).String(), file)
 			}
+		} else if strings.HasPrefix(cmd, "b64get ") {
+			file := cmd[7:]
+			cmd_get(mnt, cwd.append(file).String(), "")
 		} else if strings.HasPrefix(cmd, "put ") {
 			file := cmd[4:]
 			cmd_put(mnt, cwd.append(file).String(), file)
+		} else if strings.HasPrefix(cmd, "b64put ") {
+			file := cmd[7:]
+			cmd_put(mnt, cwd.append(file).String(), "")
 		} else if strings.HasPrefix(cmd, "rm ") {
 			file := cmd[3:]
 			if err := mnt.Remove(cwd.append(file).String()); err != nil {
@@ -118,6 +126,8 @@ func main() {
 		} else if strings.HasPrefix(cmd, "pwn ") {
 			file := cmd[4:]
 			cmd_pwn(mnt, cwd.append(file).String())
+		} else {
+			fmt.Println("unknown command")
 		}
 	}
 }
@@ -146,21 +156,50 @@ func cmd_get(mnt *nfs.Target, remotepath string, localpath string) {
 		fmt.Println(err)
 	} else {
 		defer fi.Close()
-		if fo, err := os.Create(localpath); err != nil {
-			fmt.Println(err)
+
+		if localpath == "" {
+			if data, err := io.ReadAll(fi); err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println(base64.StdEncoding.EncodeToString(data))
+			}
 		} else {
-			defer fo.Close()
-			io.Copy(fo, fi)
+			if fo, err := os.Create(localpath); err != nil {
+				fmt.Println(err)
+			} else {
+				defer fo.Close()
+				io.Copy(fo, fi)
+			}
 		}
 	}
 }
 
 func cmd_put(mnt *nfs.Target, remotepath string, localpath string) {
-	if fi, err := os.Open(localpath); err != nil {
-		fmt.Println(err)
+	var r io.Reader
+	if localpath == "" {
+		sz := 8192
+		fmt.Printf("max %d bytes>> ", sz)
+		dbuf := make([]byte, sz+10)
+		if n, err := os.Stdin.Read(dbuf); err != nil {
+			fmt.Println(err)
+		} else {
+			if bdata, err := base64.StdEncoding.DecodeString(string(dbuf[:n])); err != nil {
+				fmt.Println(err)
+			} else {
+				r = bytes.NewReader(bdata)
+			}
+		}
 	} else {
-		defer fi.Close()
-		create_and_write(mnt, remotepath, fi)
+		if fi, err := os.Open(localpath); err != nil {
+			fmt.Println(err)
+		} else {
+			defer fi.Close()
+			r = fi
+		}
+	}
+
+	if r != nil {
+		create_and_write(mnt, remotepath, r)
 	}
 }
 

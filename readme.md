@@ -24,7 +24,9 @@ Note: Don't include slashes in paths, this tool is pretty dumb.
 - `mkdir newdir` - create a directory (mode `06777`)
 - `cat file` - view file
 - `get file` - download file
+- `b64get file` - download file "visually" in base64 format
 - `put file` - upload file (mode `06777`)
+- `b64put file` - will prompt for base64 input and upload (mode `06777`)
 - `rm file` - delete file
 - `rmdir dir` - delete directory (and recursive)
 - `pwn file` - copies `file` to `file.pwn` and sets mode `06777`
