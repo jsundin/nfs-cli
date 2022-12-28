@@ -2,6 +2,8 @@
 
 Simple cli for nfs. No NFS acls are bypassed or anything. This is not an exploit. You can set machine identifier, uid and gid though.
 
+(And no, this doesn't work through a metasploit socks proxy, as go doesn't do obey proxychains.)
+
 ## Usage
 ```sh
 nfs-cli -machine iamallowed -uid 0 -gid 0 -target /path/to/exported/path -rhost remoteserver
@@ -30,6 +32,10 @@ The suid-bit doesn't work unless you are root, not sure if this is nfs or the li
 ## Example
 Metasploit:
 ```
+# we can't forward listening sockets
+sudo systemctl stop portmap
+sudo systemctl stop rpcbind.socket
+
 sudo msfconsole -q   # 111 is privileged, see below for workaround
 ...
 meterpreter > shell
