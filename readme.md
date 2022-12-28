@@ -4,6 +4,8 @@ Simple cli for nfs. No NFS acls are bypassed or anything. This is not an exploit
 
 (And no, this doesn't work through a metasploit socks proxy, as go doesn't do obey proxychains.)
 
+**It really shines when built static and uploaded to a victim machine**
+
 ## Usage
 ```sh
 nfs-cli -machine iamallowed -uid 0 -gid 0 -target /path/to/exported/path -rhost remoteserver
