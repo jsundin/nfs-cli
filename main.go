@@ -49,7 +49,7 @@ func main() {
 		util.DefaultLogger.SetDebug(true)
 	}
 
-	mount, err := nfs.DialMount(rhost, true)
+	mount, err := nfs.DialMount(rhost, priv)
 	if err != nil {
 		panic(err)
 	}
