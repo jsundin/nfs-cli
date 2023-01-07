@@ -34,6 +34,7 @@ func main() {
 	var target string
 	var rhost string
 	var debug bool
+	var priv bool
 
 	flag.StringVar(&machinename, "machine", "localhost", "machine name")
 	flag.IntVar(&uid, "uid", 0, "uid to become")
@@ -41,13 +42,14 @@ func main() {
 	flag.StringVar(&target, "target", "/home/james", "path to mount")
 	flag.StringVar(&rhost, "rhost", "localhost", "remote nfs server (needs 111 for portmapping, and whatever nfs will use)")
 	flag.BoolVar(&debug, "debug", false, "enable nfs debugging")
+	flag.BoolVar(&priv, "priv", false, "use privileged port")
 	flag.Parse()
 
 	if debug {
 		util.DefaultLogger.SetDebug(true)
 	}
 
-	mount, err := nfs.DialMount(rhost, false)
+	mount, err := nfs.DialMount(rhost, true)
 	if err != nil {
 		panic(err)
 	}

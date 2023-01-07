@@ -2,7 +2,7 @@
 
 Simple cli for nfs. No NFS acls are bypassed or anything. This is not an exploit. You can set machine identifier, uid and gid though.
 
-(And no, this doesn't work through a metasploit socks proxy, as go doesn't do obey proxychains.)
+(And no, this doesn't work through a metasploit socks proxy, as go doesn't obey proxychains.)
 
 **It really shines when built static and uploaded to a victim machine**
 
