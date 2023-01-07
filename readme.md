@@ -8,8 +8,10 @@ Simple cli for nfs. No NFS acls are bypassed or anything. This is not an exploit
 
 ## Usage
 ```sh
-nfs-cli -machine iamallowed -uid 0 -gid 0 -target /path/to/exported/path -rhost remoteserver
+nfs-cli -machine iamallowed -uid 0 -gid 0 -target /path/to/exported/path -rhost remoteserver -priv
 ```
+
+Use `-h` for help.
 
 Build static (for infil):
 ```sh
