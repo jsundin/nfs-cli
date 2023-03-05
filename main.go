@@ -38,6 +38,7 @@ func client(auth rpc.Auth, rhost string, target string, priv bool, cmd []string)
 
 	mnt, err := mount.Mount(target, auth)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "Hint: try to use a privileged port, -p")
 		panic(err)
 	}
 	defer mnt.Close()
