@@ -4,7 +4,7 @@ Simple cli for nfs. No NFS permissions are bypassed or anything. This is not an 
 
 Also, just in case the permissions aren't all that great there are some nice pwn features available.
 
-(And no, this doesn't work through a metasploit socks proxy, as go doesn't obey proxychains.)
+(And no, this doesn't work through a socks proxy, as go doesn't obey proxychains. Works fine with ligolo-ng though.)
 
 It really shines when built static and uploaded to a victim machine, or when we have direct access to a NFS share.
 
@@ -24,6 +24,7 @@ Pretty sure you need to use the `-u` switch if you are running this in Windows. 
 ### Commands
 Note: Don't include slashes in paths, this tool is pretty dumb.
 
+- `attr [path]` - get attributes for filesystem object (can be used to determine the owner of the share)
 - `ls` - list files i cwd
 - `cd newdir` - change cwd
 - `mkdir newdir` - create a directory (mode `06777`)

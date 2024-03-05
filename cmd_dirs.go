@@ -16,6 +16,38 @@ func init() {
 	commands["cd"] = xcmd_cd
 	commands["mkdir"] = xcmd_mkdir
 	commands["rmdir"] = xcmd_rmdir
+	commands["attr"] = xcmd_attr
+}
+
+func xcmd_attr(ctx *ctx_t, args string) {
+	cwd := path.Join(ctx.cwd, args)
+	attr, _, err := ctx.mnt.GetAttr(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not get file attributes for %s: %v\n", cwd, err)
+		return
+	}
+	nfstimes := map[string]nfs.NFS3Time{"m": attr.Mtime, "c": attr.Ctime, "a": attr.Atime}
+	times := map[string]time.Time{}
+	for prefix, nfst := range nfstimes {
+		t := time.Unix(int64(nfst.Seconds), int64(nfst.Nseconds))
+		times[prefix] = t
+	}
+
+	types := map[uint32]string{
+		nfs.NF3Reg:  "regular file",
+		nfs.NF3Dir:  "directory",
+		nfs.NF3Blk:  "block device",
+		nfs.NF3Chr:  "character device",
+		nfs.NF3Lnk:  "link",
+		nfs.NF3Sock: "socket",
+		nfs.NF3FIFO: "fifo",
+	}
+	typestr, f := types[attr.Type]
+	if !f {
+		typestr = "unknown"
+	}
+
+	fmt.Printf("%s: type=0x%x(%s), mode=%o, uid=%d, gid=%d, mtime=[%s], ctime=[%s], atime=[%s]\n", cwd, attr.Type, typestr, attr.FileMode, attr.UID, attr.GID, times["m"].Format(time.ANSIC), times["c"].Format(time.ANSIC), times["a"].Format(time.ANSIC))
 }
 
 func xcmd_ls(ctx *ctx_t, args string) {
