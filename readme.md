@@ -6,7 +6,7 @@ Contains some commands that makes exploiting serious misconfigurations a bit qui
 - Works great with ligolo-ng
 - Port forwarding should work fine, allows setting custom ports for portmapper/mountd/nfs
 
-Based on native Go library <github.com/willscott/go-nfs-client>, so should work fine on Windows.
+Based on native Go library <https://github.com/willscott/go-nfs-client>, so should work fine on Windows.
 
 ## Usage
 Showmount:
