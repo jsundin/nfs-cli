@@ -11,8 +11,8 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
-func newMountdClient(mountdAddr string) (*nfs.Mount, error) {
-	mountdClient, err := rpc.DialTCP("tcp", mountdAddr, false)
+func newMountdClient(mountdAddr string, privileged bool) (*nfs.Mount, error) {
+	mountdClient, err := rpc.DialTCP("tcp", mountdAddr, privileged)
 	if err != nil {
 		return nil, err
 	}
@@ -22,8 +22,8 @@ func newMountdClient(mountdAddr string) (*nfs.Mount, error) {
 	return mountd, nil
 }
 
-func getFileHandle(mountdAddr string, path string, auth rpc.Auth) ([]byte, error) {
-	mountd, err := newMountdClient(mountdAddr)
+func getFileHandle(mountdAddr string, path string, auth rpc.Auth, privileged bool) ([]byte, error) {
+	mountd, err := newMountdClient(mountdAddr, privileged)
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +143,8 @@ type ExportedFilesystem struct {
 	Options   []string
 }
 
-func showMount(mountdAddr string, auth rpc.Auth) ([]*ExportedFilesystem, error) {
-	mountd, err := newMountdClient(mountdAddr)
+func showMount(mountdAddr string, auth rpc.Auth, privileged bool) ([]*ExportedFilesystem, error) {
+	mountd, err := newMountdClient(mountdAddr, privileged)
 	if err != nil {
 		return nil, err
 	}

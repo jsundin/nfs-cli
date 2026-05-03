@@ -133,7 +133,7 @@ func run(args []string) error {
 }
 
 func runShowmount(mountdAddr string, auth rpc.Auth) error {
-	exports, err := showMount(mountdAddr, auth)
+	exports, err := showMount(mountdAddr, auth, flags.privileged)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func runCli(mountdAddr string, nfsAddr string, path string, auth rpc.Auth, args 
 			return err
 		}
 	} else {
-		if fh, err = getFileHandle(mountdAddr, path, auth); err != nil {
+		if fh, err = getFileHandle(mountdAddr, path, auth, flags.privileged); err != nil {
 			util.DefaultLogger.Errorf("failed to obtain file handle for '%s': %s", path, err)
 			return err
 		}
