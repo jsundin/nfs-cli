@@ -139,7 +139,13 @@ func runShowmount(mountdAddr string, auth rpc.Auth) error {
 	}
 
 	for _, export := range exports {
-		fmt.Printf("- %s (%s)\n", export.Directory, strings.Join(export.Options, ", "))
+		var opts string
+		if len(export.Options) == 0 {
+			opts = "everyone"
+		} else {
+			strings.Join(export.Options, ", ")
+		}
+		fmt.Printf("- %s (%s)\n", export.Directory, opts)
 	}
 	return nil
 }
